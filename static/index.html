@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Polymarket Volatility Monitor</title>
+<script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-dim: #8b949e;
+    --green: #3fb950;
+    --red: #f85149;
+    --amber: #d29922;
+    --blue: #58a6ff;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', monospace; }
+
+  .header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 24px; border-bottom: 1px solid var(--border);
+  }
+  .header h1 { font-size: 16px; letter-spacing: 2px; color: var(--text-dim); }
+  .header .price { font-size: 32px; font-weight: 700; }
+  .header .meta { text-align: right; font-size: 13px; color: var(--text-dim); }
+  .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  .status-dot.connected { background: var(--green); }
+  .status-dot.disconnected { background: var(--red); }
+
+  .signal-banner {
+    display: none; padding: 12px 24px; font-size: 15px; font-weight: 600;
+    align-items: center; gap: 16px;
+  }
+  .signal-banner.buy { display: flex; background: rgba(63,185,80,0.15); color: var(--green); border-bottom: 2px solid var(--green); }
+  .signal-banner.sell { display: flex; background: rgba(248,81,73,0.15); color: var(--red); border-bottom: 2px solid var(--red); }
+  .strength-bar { height: 6px; border-radius: 3px; background: var(--border); width: 120px; }
+  .strength-fill { height: 100%; border-radius: 3px; transition: width 0.3s; }
+  .buy .strength-fill { background: var(--green); }
+  .sell .strength-fill { background: var(--red); }
+
+  #chart-container { width: 100%; height: 400px; border-bottom: 1px solid var(--border); }
+
+  .metrics {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px;
+    background: var(--border); border-bottom: 1px solid var(--border);
+  }
+  .metric-card {
+    background: var(--surface); padding: 16px 24px;
+  }
+  .metric-card .label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; }
+  .metric-card .value { font-size: 24px; font-weight: 700; }
+  .metric-card .sub { font-size: 12px; color: var(--text-dim); margin-top: 4px; }
+
+  .signal-table-wrap {
+    padding: 16px 24px; max-height: 300px; overflow-y: auto;
+  }
+  .signal-table-wrap h2 { font-size: 13px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; color: var(--text-dim); font-weight: 500; padding: 6px 12px; border-bottom: 1px solid var(--border); }
+  td { padding: 6px 12px; border-bottom: 1px solid var(--border); }
+  tr.buy-row td:first-child { color: var(--green); font-weight: 600; }
+  tr.sell-row td:first-child { color: var(--red); font-weight: 600; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>IRAN BOOTS ON GROUND — VOLATILITY MONITOR</h1>
+  </div>
+  <div style="text-align:center">
+    <div class="price" id="current-price">--</div>
+    <div style="font-size:12px;color:var(--text-dim)">YES Price</div>
+  </div>
+  <div class="meta">
+    <div><span class="status-dot disconnected" id="status-dot"></span><span id="status-text">Connecting...</span></div>
+    <div id="last-update">--</div>
+  </div>
+</div>
+
+<div class="signal-banner" id="signal-banner">
+  <span id="signal-type">--</span>
+  <span>|</span>
+  <span>Z-Score: <strong id="signal-z">--</strong></span>
+  <span>|</span>
+  <span>Strength:</span>
+  <div class="strength-bar"><div class="strength-fill" id="signal-strength" style="width:0%"></div></div>
+  <span>|</span>
+  <span id="signal-detail">--</span>
+</div>
+
+<div id="chart-container"></div>
+
+<div class="metrics">
+  <div class="metric-card">
+    <div class="label">Bollinger Position</div>
+    <div class="value" id="bb-position">--</div>
+    <div class="sub" id="bb-detail">SMA: -- | Upper: -- | Lower: --</div>
+  </div>
+  <div class="metric-card">
+    <div class="label">Order Book Imbalance</div>
+    <div class="value" id="ob-imbalance">--</div>
+    <div class="sub" id="ob-detail">Bid: -- | Ask: -- | Spread: --</div>
+  </div>
+  <div class="metric-card">
+    <div class="label">Volatility (Std Dev)</div>
+    <div class="value" id="vol-value">--</div>
+    <div class="sub" id="vol-detail">Period: 20 snapshots</div>
+  </div>
+</div>
+
+<div class="signal-table-wrap">
+  <h2>Signal History</h2>
+  <table>
+    <thead><tr><th>Signal</th><th>Price</th><th>Z-Score</th><th>Strength</th><th>Imbalance</th><th>Time</th></tr></thead>
+    <tbody id="signal-tbody"></tbody>
+  </table>
+</div>
+
+<script>
+// Chart setup
+const chartEl = document.getElementById('chart-container');
+const chart = LightweightCharts.createChart(chartEl, {
+  layout: { background: { color: '#0d1117' }, textColor: '#8b949e' },
+  grid: { vertLines: { color: '#1c2128' }, horzLines: { color: '#1c2128' } },
+  crosshair: { mode: 0 },
+  timeScale: { timeVisible: true, secondsVisible: false },
+  rightPriceScale: { borderColor: '#30363d' },
+});
+
+const priceSeries = chart.addLineSeries({ color: '#58a6ff', lineWidth: 2 });
+const upperSeries = chart.addLineSeries({ color: '#d29922', lineWidth: 1, lineStyle: 2 });
+const lowerSeries = chart.addLineSeries({ color: '#d29922', lineWidth: 1, lineStyle: 2 });
+const smaSeries = chart.addLineSeries({ color: '#8b949e', lineWidth: 1, lineStyle: 1 });
+
+let markers = [];
+
+function tsToChart(unix) {
+  return Math.floor(unix);
+}
+
+function loadBandSeries(bandData) {
+  if (!bandData || !bandData.length) return;
+  const price = [], upper = [], lower = [], sma = [];
+  for (const d of bandData) {
+    const t = tsToChart(d.t);
+    price.push({ time: t, value: d.p });
+    upper.push({ time: t, value: d.upper });
+    lower.push({ time: t, value: d.lower });
+    sma.push({ time: t, value: d.sma });
+  }
+  priceSeries.setData(price);
+  upperSeries.setData(upper);
+  lowerSeries.setData(lower);
+  smaSeries.setData(sma);
+}
+
+function appendPoint(snapshot, bands) {
+  if (!snapshot) return;
+  const t = tsToChart(snapshot.unix_ts);
+  priceSeries.update({ time: t, value: snapshot.yes_price });
+  if (bands) {
+    upperSeries.update({ time: t, value: bands.upper });
+    lowerSeries.update({ time: t, value: bands.lower });
+    smaSeries.update({ time: t, value: bands.sma });
+  }
+}
+
+function addSignalMarker(signal) {
+  if (!signal) return;
+  const t = tsToChart(signal.unix_ts);
+  markers.push({
+    time: t,
+    position: signal.signal_type === 'BUY' ? 'belowBar' : 'aboveBar',
+    color: signal.signal_type === 'BUY' ? '#3fb950' : '#f85149',
+    shape: signal.signal_type === 'BUY' ? 'arrowUp' : 'arrowDown',
+    text: signal.signal_type,
+  });
+  markers.sort((a, b) => a.time - b.time);
+  priceSeries.setMarkers(markers);
+}
+
+// UI updates
+function updatePrice(snapshot) {
+  if (!snapshot) return;
+  document.getElementById('current-price').textContent =
+    (snapshot.yes_price * 100).toFixed(1) + '\u00a2';
+  const dt = new Date(snapshot.timestamp || snapshot.unix_ts * 1000);
+  document.getElementById('last-update').textContent = dt.toLocaleTimeString();
+}
+
+function updateBanner(signal) {
+  const banner = document.getElementById('signal-banner');
+  if (!signal) {
+    banner.className = 'signal-banner';
+    return;
+  }
+  banner.className = 'signal-banner ' + signal.signal_type.toLowerCase();
+  document.getElementById('signal-type').textContent = signal.signal_type + ' SIGNAL';
+  document.getElementById('signal-z').textContent = signal.z_score?.toFixed(2) || '--';
+  document.getElementById('signal-strength').style.width = ((signal.strength || 0) * 100) + '%';
+  const imb = signal.imbalance || 0;
+  const imbDir = imb > 0 ? 'Buyers dominate' : imb < 0 ? 'Sellers dominate' : 'Neutral';
+  document.getElementById('signal-detail').textContent =
+    `Price: ${(signal.price_at_signal * 100).toFixed(1)}\u00a2 | OB: ${imbDir}`;
+}
+
+function updateMetrics(snapshot, bands) {
+  if (bands) {
+    const pos = bands.upper !== bands.lower
+      ? ((bands.current_price - bands.lower) / (bands.upper - bands.lower) * 100)
+      : 50;
+    const posEl = document.getElementById('bb-position');
+    posEl.textContent = pos.toFixed(0) + '%';
+    posEl.style.color = pos < 30 ? '#3fb950' : pos > 70 ? '#f85149' : '#d29922';
+    document.getElementById('bb-detail').textContent =
+      `SMA: ${(bands.sma * 100).toFixed(1)}\u00a2 | Upper: ${(bands.upper * 100).toFixed(1)}\u00a2 | Lower: ${(bands.lower * 100).toFixed(1)}\u00a2`;
+    document.getElementById('vol-value').textContent = (bands.std * 100).toFixed(3) + '\u00a2';
+  }
+  if (snapshot) {
+    const imb = snapshot.imbalance || 0;
+    const imbEl = document.getElementById('ob-imbalance');
+    imbEl.textContent = (imb > 0 ? '+' : '') + (imb * 100).toFixed(1) + '%';
+    imbEl.style.color = imb > 0.05 ? '#3fb950' : imb < -0.05 ? '#f85149' : '#8b949e';
+    document.getElementById('ob-detail').textContent =
+      `Bid: ${snapshot.best_bid ? (snapshot.best_bid * 100).toFixed(1) + '\u00a2' : '--'} | ` +
+      `Ask: ${snapshot.best_ask ? (snapshot.best_ask * 100).toFixed(1) + '\u00a2' : '--'} | ` +
+      `Spread: ${snapshot.spread ? (snapshot.spread * 10000).toFixed(0) + 'bps' : '--'}`;
+  }
+}
+
+function addSignalRow(signal) {
+  if (!signal) return;
+  const tbody = document.getElementById('signal-tbody');
+  const tr = document.createElement('tr');
+  tr.className = signal.signal_type.toLowerCase() + '-row';
+  const dt = new Date(signal.timestamp || signal.unix_ts * 1000);
+  tr.innerHTML = `
+    <td>${signal.signal_type}</td>
+    <td>${(signal.price_at_signal * 100).toFixed(1)}\u00a2</td>
+    <td>${signal.z_score?.toFixed(2) || '--'}</td>
+    <td>${((signal.strength || 0) * 100).toFixed(0)}%</td>
+    <td>${((signal.imbalance || 0) * 100).toFixed(1)}%</td>
+    <td>${dt.toLocaleTimeString()}</td>
+  `;
+  tbody.insertBefore(tr, tbody.firstChild);
+  // Keep max 50 rows
+  while (tbody.children.length > 50) tbody.removeChild(tbody.lastChild);
+}
+
+// Load initial data
+async function loadHistory() {
+  try {
+    const [histRes, sigRes] = await Promise.all([
+      fetch('/api/history').then(r => r.json()),
+      fetch('/api/signals').then(r => r.json()),
+    ]);
+
+    if (histRes.band_series) loadBandSeries(histRes.band_series);
+
+    // Load signal markers
+    for (const sig of (sigRes.signals || [])) {
+      addSignalMarker(sig);
+      addSignalRow(sig);
+    }
+
+    chart.timeScale().fitContent();
+  } catch (e) {
+    console.error('Failed to load history:', e);
+  }
+}
+
+// SSE connection
+function connectSSE() {
+  const dot = document.getElementById('status-dot');
+  const text = document.getElementById('status-text');
+  const es = new EventSource('/events');
+
+  es.onopen = () => {
+    dot.className = 'status-dot connected';
+    text.textContent = 'Live';
+  };
+  es.onerror = () => {
+    dot.className = 'status-dot disconnected';
+    text.textContent = 'Reconnecting...';
+  };
+  es.onmessage = (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      updatePrice(data.snapshot);
+      appendPoint(data.snapshot, data.bollinger);
+      updateMetrics(data.snapshot, data.bollinger);
+      updateBanner(data.signal);
+      if (data.signal) {
+        addSignalMarker(data.signal);
+        addSignalRow(data.signal);
+      }
+    } catch (err) {
+      console.error('SSE parse error:', err);
+    }
+  };
+}
+
+// Resize chart on window resize
+window.addEventListener('resize', () => {
+  chart.applyOptions({ width: chartEl.clientWidth });
+});
+
+loadHistory();
+connectSSE();
+</script>
+</body>
+</html>
