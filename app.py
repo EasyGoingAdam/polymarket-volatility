@@ -15,13 +15,19 @@ from fastapi.staticfiles import StaticFiles
 
 import api_client
 import bollinger
+import indicators
+import patterns
+import risk
+import composite
 import db
-from config import MARKET_ID, POLL_INTERVAL_SECONDS
+from config import MARKET_ID, POLL_INTERVAL_SECONDS, RISK_COMPUTE_INTERVAL
 
 # Global state
 yes_token_id: Optional[str] = None
 market_info: Dict = {}
 latest_state: Dict = {}
+latest_risk: Dict = {}
+poll_count: int = 0
 sse_clients: List[asyncio.Queue] = []
 
 
@@ -66,7 +72,7 @@ async def backfill_history():
 
 async def poll_loop():
     """Main polling loop - fetch price + orderbook every POLL_INTERVAL_SECONDS."""
-    global latest_state
+    global latest_state, latest_risk, poll_count
     while True:
         try:
             # Fetch current data
@@ -97,27 +103,61 @@ async def poll_loop():
             }
             await asyncio.to_thread(db.store_snapshot, snapshot)
 
-            # Compute Bollinger bands
+            # Get recent snapshots for all computations
             recent = await asyncio.to_thread(db.get_recent_snapshots, 500)
+
+            # Compute all technical indicators
+            indicator_values = indicators.compute_all(recent)
+
+            # Add pattern/regime detection
+            prices = [s["yes_price"] for s in recent if s.get("yes_price")]
+            adx_val = patterns.compute_adx(prices)
+            hurst_val = patterns.compute_hurst(prices)
+            regime = patterns.detect_regime(adx_val, hurst_val)
+            indicator_values["adx"] = adx_val
+            indicator_values["hurst_exponent"] = hurst_val
+            indicator_values["regime"] = regime
+
+            await asyncio.to_thread(db.store_indicator_snapshot, indicator_values)
+
+            # Compute Bollinger bands (for chart overlay)
             bands = bollinger.compute_bollinger(recent)
-
-            # Detect signal
-            signal = None
-            if bands:
-                signal = bollinger.detect_signal(current_price, bands, ob.get("imbalance", 0))
-                if signal:
-                    await asyncio.to_thread(db.store_signal, signal)
-                    print(f"[Signal] {signal['signal_type']} @ {current_price:.4f} "
-                          f"(z={bands['z_score']:.2f}, strength={signal['strength']:.2f})")
-
-            # Compute band series for chart
             band_series = bollinger.compute_band_series(recent)
+
+            # Generate composite signal
+            comp_signal = composite.generate_signal(indicator_values, snapshot, latest_risk)
+            if comp_signal:
+                await asyncio.to_thread(db.store_composite_signal, comp_signal)
+                print(f"[Composite] {comp_signal['signal_type']} score={comp_signal['composite_score']:.3f} "
+                      f"conf={comp_signal['confidence']:.2f} regime={regime} | {comp_signal['reasoning']}")
+
+            # Keep old Bollinger signal for backward compat
+            old_signal = None
+            if bands:
+                old_signal = bollinger.detect_signal(current_price, bands, ob.get("imbalance", 0))
+                if old_signal:
+                    await asyncio.to_thread(db.store_signal, old_signal)
+
+            # Risk metrics every N polls
+            poll_count += 1
+            if poll_count % RISK_COMPUTE_INTERVAL == 0:
+                comp_signals = await asyncio.to_thread(db.get_recent_composite_signals, 200)
+                latest_risk = risk.compute_metrics(comp_signals, recent)
+                if latest_risk.get("total_signals", 0) > 0:
+                    await asyncio.to_thread(db.store_risk_metrics, latest_risk)
+
+            # Support/resistance
+            sr = patterns.find_support_resistance(prices)
 
             latest_state = {
                 "snapshot": snapshot,
                 "bollinger": bands,
-                "signal": signal,
-                "band_series": band_series[-100:],  # Last 100 for SSE payload size
+                "signal": comp_signal,
+                "old_signal": old_signal,
+                "indicators": indicator_values,
+                "risk": latest_risk,
+                "support_resistance": sr,
+                "band_series": band_series[-100:],
                 "market": {
                     "question": market_info.get("question", ""),
                     "volume": mkt.get("volume"),
@@ -129,7 +169,9 @@ async def poll_loop():
             broadcast(latest_state)
 
         except Exception as e:
+            import traceback
             print(f"[Poll] Error: {e}")
+            traceback.print_exc()
 
         await asyncio.sleep(POLL_INTERVAL_SECONDS)
 
@@ -193,9 +235,33 @@ async def api_status():
         "snapshot_count": count,
         "latest": latest_state.get("snapshot"),
         "bollinger": latest_state.get("bollinger"),
+        "indicators": latest_state.get("indicators"),
         "active_signal": latest_state.get("signal"),
+        "risk": latest_state.get("risk"),
         "connected_clients": len(sse_clients),
     }
+
+
+@app.get("/api/indicators")
+async def api_indicators():
+    return {"indicators": latest_state.get("indicators", {})}
+
+
+@app.get("/api/indicators/history")
+async def api_indicators_history(limit: int = 200):
+    data = await asyncio.to_thread(db.get_recent_indicator_snapshots, limit)
+    return {"indicators": data}
+
+
+@app.get("/api/risk")
+async def api_risk():
+    return {"risk": latest_risk}
+
+
+@app.get("/api/composite")
+async def api_composite(limit: int = 50):
+    signals = await asyncio.to_thread(db.get_recent_composite_signals, limit)
+    return {"signals": signals}
 
 
 @app.get("/events")
