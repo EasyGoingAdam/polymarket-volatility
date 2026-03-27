@@ -160,20 +160,17 @@ def compute_hurst(prices: List[float], window: int = HURST_WINDOW) -> Optional[f
 
 
 def detect_regime(adx: Optional[float], hurst: Optional[float]) -> str:
-    """Classify market regime as trending or mean-reverting."""
-    trending_signals = 0
-    total = 0
-    if adx is not None:
-        total += 1
-        if adx > REGIME_TRENDING_ADX:
-            trending_signals += 1
+    """ADX-dominant regime detection.
+    ADX is more reliable than Hurst for noisy 30s prediction market data."""
+    # ADX is primary — it was averaging 65 in live data (clearly trending)
+    if adx is not None and adx > REGIME_TRENDING_ADX:
+        return "trending"
+    if adx is not None and adx < 20:
+        return "mean_reverting"
+    # Only use Hurst as tiebreaker in ambiguous ADX range (20-25)
     if hurst is not None:
-        total += 1
-        if hurst > 0.5:
-            trending_signals += 1
-    if total == 0:
-        return "unknown"
-    return "trending" if trending_signals > total / 2 else "mean_reverting"
+        return "trending" if hurst > 0.55 else "mean_reverting"
+    return "unknown"
 
 
 def detect_breakout(current_price: float,

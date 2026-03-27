@@ -278,18 +278,32 @@ def compute_cci(prices: List[float], period: int = CCI_PERIOD) -> Optional[float
 # Orchestrator
 # ---------------------------------------------------------------------------
 
+def _smooth_prices(prices: List[float], period: int = 5) -> List[float]:
+    """EMA-smooth raw prices to reduce 30s polling noise.
+    Uses a short EMA(5) which preserves trends but dampens tick noise."""
+    if len(prices) < period:
+        return prices
+    smoothed = _ema(prices, period)
+    # Replace None values with originals
+    return [s if s is not None else p for s, p in zip(smoothed, prices)]
+
+
 def compute_all(snapshots: List[Dict]) -> Dict:
     """Compute all indicators from snapshot list. Returns flat dict for DB storage."""
     now = datetime.now(timezone.utc)
-    prices = [s["yes_price"] for s in snapshots if s.get("yes_price") is not None]
+    raw_prices = [s["yes_price"] for s in snapshots if s.get("yes_price") is not None]
 
     result = {
         "timestamp": now.isoformat(),
         "unix_ts": now.timestamp(),
     }
 
-    if len(prices) < 5:
+    if len(raw_prices) < 5:
         return result
+
+    # Smooth prices with EMA(5) to reduce 30s polling noise
+    # This fixes RSI hitting 0/100 and CCI hitting ±666
+    prices = _smooth_prices(raw_prices)
 
     # Momentum
     result["rsi_14"] = compute_rsi(prices)
