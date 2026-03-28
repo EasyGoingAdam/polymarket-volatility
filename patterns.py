@@ -53,8 +53,8 @@ def find_support_resistance(prices: List[float],
 
 
 def compute_adx(prices: List[float], period: int = ADX_PERIOD) -> Optional[float]:
-    """Approximate ADX from single-price series."""
-    if len(prices) < period * 2 + 1:
+    """Approximate ADX from single-price series. Fully guarded against div-by-zero."""
+    if not prices or period < 1 or len(prices) < period * 2 + 1:
         return None
 
     # Approximate +DM/-DM from consecutive changes
@@ -90,6 +90,7 @@ def compute_adx(prices: List[float], period: int = ADX_PERIOD) -> Optional[float
     dx_list = []
     for i in range(len(sm_tr)):
         if sm_tr[i] < 1e-10:
+            dx_list.append(0.0)
             continue
         di_plus = sm_plus[i] / sm_tr[i] * 100
         di_minus = sm_minus[i] / sm_tr[i] * 100
@@ -133,10 +134,14 @@ def compute_hurst(prices: List[float], window: int = HURST_WINDOW) -> Optional[f
         rs_for_size = []
         for start in range(0, n - size + 1, size):
             chunk = returns[start:start + size]
+            if len(chunk) < 2:
+                continue
             mean_c = statistics.mean(chunk)
             deviations = [sum(chunk[:i + 1]) - (i + 1) * mean_c for i in range(len(chunk))]
+            if not deviations:
+                continue
             R = max(deviations) - min(deviations)
-            S = statistics.stdev(chunk) if len(chunk) > 1 else 1e-10
+            S = statistics.stdev(chunk)
             if S > 1e-10:
                 rs_for_size.append(R / S)
         if rs_for_size:

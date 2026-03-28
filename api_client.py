@@ -33,17 +33,26 @@ async def _get(url: str, params: dict = None, retries: int = 3):
     for attempt in range(retries):
         try:
             async with session.get(url, params=params) as resp:
-                resp.raise_for_status()
+                if resp.status >= 400:
+                    print(f"[API] {url} returned {resp.status}")
+                    if attempt == retries - 1:
+                        return None
+                    await asyncio.sleep(2 ** attempt)
+                    continue
                 return await resp.json()
-        except Exception:
+        except Exception as e:
+            print(f"[API] {url} attempt {attempt+1}/{retries}: {e}")
             if attempt == retries - 1:
-                raise
-            await asyncio.sleep(2 ** attempt)
+                return None
+            await asyncio.sleep(min(2 ** attempt, 5))
 
 
 async def fetch_market(market_id: str) -> Dict:
     """Fetch market metadata from Gamma API."""
-    data = await _get(f"{GAMMA_BASE}/markets/{market_id}")
+    try:
+        data = await _get(f"{GAMMA_BASE}/markets/{market_id}")
+    except Exception:
+        data = None
     if not data:
         return {}
 

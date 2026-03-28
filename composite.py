@@ -27,7 +27,9 @@ CONFIDENCE_FLOOR = 0.45    # don't fire below this
 COOLDOWN_SECONDS = 300     # 5 min between same-direction signals
 TREND_SUPPRESSION = 0.6    # scale down mean-reversion when trending strongly
 
-# Track last signal for cooldown
+# Track last signal for cooldown (thread-safe)
+import threading
+_cooldown_lock = threading.Lock()
 _last_signal_type = None
 _last_signal_ts = 0.0
 
@@ -257,13 +259,13 @@ def generate_signal(indicators: Dict, snapshot: Dict,
 
     signal_type = "BUY" if composite > 0 else "SELL"
 
-    # 3. Cooldown: no same-direction signal within 5 minutes
-    if signal_type == _last_signal_type and (now_ts - _last_signal_ts) < COOLDOWN_SECONDS:
-        return None
-
-    # Passed all gates — this is a real signal
-    _last_signal_type = signal_type
-    _last_signal_ts = now_ts
+    # 3. Cooldown: no same-direction signal within 5 minutes (thread-safe)
+    with _cooldown_lock:
+        if signal_type == _last_signal_type and (now_ts - _last_signal_ts) < COOLDOWN_SECONDS:
+            return None
+        # Passed all gates — this is a real signal
+        _last_signal_type = signal_type
+        _last_signal_ts = now_ts
 
     # Kelly / risk info
     kelly = 0.0

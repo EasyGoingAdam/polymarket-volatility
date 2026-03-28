@@ -66,14 +66,19 @@ def compute_band_series(snapshots: List[Dict]) -> List[Dict]:
 
     series = []
     for i in range(BOLLINGER_PERIOD - 1, len(snapshots)):
-        window = [s["yes_price"] for s in snapshots[i - BOLLINGER_PERIOD + 1: i + 1]]
-        sma = statistics.mean(window)
-        std = statistics.pstdev(window)
-        series.append({
-            "t": snapshots[i]["unix_ts"],
-            "p": snapshots[i]["yes_price"],
-            "sma": round(sma, 6),
-            "upper": round(sma + BOLLINGER_STD_MULTIPLIER * std, 6),
-            "lower": round(max(0.0, sma - BOLLINGER_STD_MULTIPLIER * std), 6),
-        })
+        try:
+            window = [s["yes_price"] for s in snapshots[i - BOLLINGER_PERIOD + 1: i + 1]]
+            if not window:
+                continue
+            sma = statistics.mean(window)
+            std = statistics.pstdev(window) if len(window) > 1 else 0.0
+            series.append({
+                "t": snapshots[i]["unix_ts"],
+                "p": snapshots[i]["yes_price"],
+                "sma": round(sma, 6),
+                "upper": round(sma + BOLLINGER_STD_MULTIPLIER * std, 6),
+                "lower": round(max(0.0, sma - BOLLINGER_STD_MULTIPLIER * std), 6),
+            })
+        except (KeyError, TypeError, ZeroDivisionError):
+            continue
     return series

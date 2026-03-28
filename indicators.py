@@ -302,46 +302,53 @@ def compute_all(snapshots: List[Dict]) -> Dict:
         return result
 
     # Smooth prices with EMA(5) to reduce 30s polling noise
-    # This fixes RSI hitting 0/100 and CCI hitting ±666
     prices = _smooth_prices(raw_prices)
 
+    # Each indicator is wrapped in try/except so one failure doesn't crash all
+    def _safe(fn, *args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            print(f"[Indicators] {fn.__name__} error: {e}")
+            return None
+
     # Momentum
-    result["rsi_14"] = compute_rsi(prices)
-    macd = compute_macd(prices)
+    result["rsi_14"] = _safe(compute_rsi, prices)
+    macd = _safe(compute_macd, prices)
     if macd:
-        result["macd_line"] = macd["macd_line"]
-        result["macd_signal"] = macd["macd_signal"]
-        result["macd_histogram"] = macd["macd_histogram"]
-    stoch = compute_stochastic(prices)
+        result["macd_line"] = macd.get("macd_line")
+        result["macd_signal"] = macd.get("macd_signal")
+        result["macd_histogram"] = macd.get("macd_histogram")
+    stoch = _safe(compute_stochastic, prices)
     if stoch:
-        result["stoch_k"] = stoch["stoch_k"]
-        result["stoch_d"] = stoch["stoch_d"]
-    result["roc_12"] = compute_roc(prices)
-    result["williams_r"] = compute_williams_r(prices)
+        result["stoch_k"] = stoch.get("stoch_k")
+        result["stoch_d"] = stoch.get("stoch_d")
+    result["roc_12"] = _safe(compute_roc, prices)
+    result["williams_r"] = _safe(compute_williams_r, prices)
 
     # Volatility
-    result["atr_14"] = compute_atr(prices)
-    keltner = compute_keltner(prices)
+    result["atr_14"] = _safe(compute_atr, prices)
+    keltner = _safe(compute_keltner, prices)
     if keltner:
-        result["keltner_upper"] = keltner["keltner_upper"]
-        result["keltner_lower"] = keltner["keltner_lower"]
-        result["keltner_mid"] = keltner["keltner_mid"]
-    result["historical_vol"] = compute_historical_volatility(prices)
-    result["vol_of_vol"] = compute_vol_of_vol(prices)
+        result["keltner_upper"] = keltner.get("keltner_upper")
+        result["keltner_lower"] = keltner.get("keltner_lower")
+        result["keltner_mid"] = keltner.get("keltner_mid")
+    result["historical_vol"] = _safe(compute_historical_volatility, prices)
+    result["vol_of_vol"] = _safe(compute_vol_of_vol, prices)
 
     # Volume / Liquidity
-    result["obv"] = compute_obv(snapshots)
-    result["volume_roc"] = compute_volume_roc(snapshots)
+    result["obv"] = _safe(compute_obv, snapshots)
+    result["volume_roc"] = _safe(compute_volume_roc, snapshots)
     if snapshots:
-        result["liquidity_score"] = compute_liquidity_score(snapshots[-1])
+        result["liquidity_score"] = _safe(compute_liquidity_score, snapshots[-1])
 
     # Mean Reversion
-    result["cci_20"] = compute_cci(prices)
-    bands = bollinger.compute_bollinger(snapshots)
+    result["cci_20"] = _safe(compute_cci, prices)
+    bands = _safe(bollinger.compute_bollinger, snapshots)
     if bands:
-        result["bollinger_upper"] = bands["upper"]
-        result["bollinger_lower"] = bands["lower"]
-        result["bollinger_sma"] = bands["sma"]
-        result["bollinger_z"] = bands["z_score"]
+        result["bollinger_upper"] = bands.get("upper")
+        result["bollinger_lower"] = bands.get("lower")
+        result["bollinger_sma"] = bands.get("sma")
+        result["bollinger_z"] = bands.get("z_score")
 
     return result

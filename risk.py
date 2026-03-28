@@ -101,36 +101,40 @@ def compute_metrics(signals: List[Dict], snapshots: List[Dict]) -> Dict:
     loss_amounts = []
 
     for sig in signals:
-        sig_ts = sig.get("unix_ts", 0)
-        sig_price = sig.get("composite_score") and sig.get("mean_reversion_score") is not None
-        price_at = None
-        price_after = None
+        try:
+            sig_ts = sig.get("unix_ts", 0)
+            if not sig_ts:
+                continue
+            price_at = None
+            price_after = None
 
-        for ts, p in snap_prices:
-            if price_at is None and ts >= sig_ts:
-                price_at = p
-            if price_at is not None and ts >= sig_ts + 300:  # 5 min later
-                price_after = p
-                break
+            for ts, p in snap_prices:
+                if price_at is None and ts >= sig_ts:
+                    price_at = p
+                if price_at is not None and ts >= sig_ts + 300:  # 5 min later
+                    price_after = p
+                    break
 
-        if price_at is None or price_after is None:
+            if price_at is None or price_after is None:
+                continue
+
+            direction = 1.0 if sig.get("signal_type") == "BUY" else -1.0
+            pnl = (price_after - price_at) * direction
+            returns.append(pnl)
+
+            if pnl > 0:
+                wins += 1
+                win_amounts.append(pnl)
+            elif pnl < 0:
+                loss_amounts.append(abs(pnl))
+        except (KeyError, TypeError, ValueError):
             continue
-
-        direction = 1.0 if sig.get("signal_type") == "BUY" else -1.0
-        pnl = (price_after - price_at) * direction
-        returns.append(pnl)
-
-        if pnl > 0:
-            wins += 1
-            win_amounts.append(pnl)
-        else:
-            loss_amounts.append(abs(pnl))
 
     result["profitable_signals"] = wins
 
-    if returns:
-        result["win_rate"] = round(wins / len(returns), 4) if returns else None
-        result["avg_profit"] = round(statistics.mean(returns), 6) if returns else None
+    if len(returns) > 0:
+        result["win_rate"] = round(wins / len(returns), 4)
+        result["avg_profit"] = round(statistics.mean(returns), 6)
         result["sharpe_ratio"] = compute_sharpe(returns)
         result["sortino_ratio"] = compute_sortino(returns)
         result["var_95"] = compute_var(returns)
