@@ -18,6 +18,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+# Use absolute paths relative to this file so Railway deploys work
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_STATIC_DIR = os.path.join(_HERE, "static")
+
 import api_client
 import bollinger
 import indicators
@@ -25,7 +29,7 @@ import patterns
 import risk
 import composite
 import db
-from config import MARKET_ID, POLL_INTERVAL_SECONDS, RISK_COMPUTE_INTERVAL
+from config import MARKET_ID, POLL_INTERVAL_SECONDS, RISK_COMPUTE_INTERVAL, PORT
 
 # Global state
 yes_token_id: Optional[str] = None
@@ -245,7 +249,14 @@ async def lifespan(app: FastAPI):
     global yes_token_id, market_info, app_start_time
     app_start_time = datetime.now(timezone.utc).timestamp()
 
+    # Safety: verify all critical paths exist at startup
+    print(f"[Startup] App directory: {_HERE}")
+    print(f"[Startup] Static directory: {_STATIC_DIR} (exists={os.path.isdir(_STATIC_DIR)})")
+    print(f"[Startup] index.html exists: {os.path.isfile(os.path.join(_STATIC_DIR, 'index.html'))}")
+    print(f"[Startup] PORT={PORT}")
+
     db.init_db()
+    print("[Startup] Database initialized OK")
     print("[Startup] Fetching market metadata...")
     try:
         market_info = await api_client.fetch_market(MARKET_ID) or {}
@@ -277,16 +288,17 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Polymarket Volatility Monitor", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
-app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/static", StaticFiles(directory=_STATIC_DIR), name="static")
 
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
+    index_path = os.path.join(_STATIC_DIR, "index.html")
     try:
-        with open("static/index.html") as f:
+        with open(index_path) as f:
             return f.read()
     except FileNotFoundError:
-        return HTMLResponse("<h1>Dashboard not found</h1><p>static/index.html is missing</p>", 500)
+        return HTMLResponse(f"<h1>Dashboard not found</h1><p>{index_path} is missing</p>", 500)
 
 
 # ==================== HEALTH CHECK ====================
@@ -441,4 +453,4 @@ async def sse(request: Request):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app:app", host="0.0.0.0", port=8888, reload=True)
+    uvicorn.run("app:app", host="0.0.0.0", port=PORT, reload=True)
